@@ -1,73 +1,91 @@
-"""Configuration: everything comes from environment variables.
+"""Settings loaded from environment variables / cookie files."""
 
-See ``.env.example`` for the full list.
-"""
 from __future__ import annotations
 
+import json
 import os
-import secrets
 from dataclasses import dataclass, field
-from pathlib import Path
 
 
-def _env(name: str, default: str = "") -> str:
-    return os.environ.get(name, default)
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
+@dataclass
+class AccountConfig:
+    name: str
+    cookies: str  # "a=b; c=d" cookie header value for muse.ai
 
 
 @dataclass
 class Settings:
-    """Runtime settings, built from the environment."""
-
+    api_key: str = ""          # Bearer key protecting /v1/* (empty = no auth)
     host: str = "127.0.0.1"
-    port: int = 18610
-    driver: str = "mock"  # mock | meta
-    api_key: str = ""  # Bearer token protecting THIS service
-    data_dir: Path = field(default_factory=lambda: Path("./data"))
-    meta_api_key: str = ""  # static upstream key (META_API_KEY / MODEL_API_KEY)
-    upstream_timeout: float = 60.0
-    chat_timeout: float = 300.0
-    image_timeout: float = 240.0
-    log_level: str = "INFO"
+    port: int = 8000
+    accounts: list[AccountConfig] = field(default_factory=list)
+    poll_interval: float = 2.0
+    wait_s: float = 300.0
+    quiet_s: float = 10.0
+    model_name: str = "muse"
 
-    @classmethod
-    def from_env(cls) -> "Settings":
-        data_dir = Path(_env("MUSE2API_DATA_DIR", "./data"))
-        data_dir.mkdir(parents=True, exist_ok=True)
 
-        api_key = _env("MUSE2API_KEY", "")
-        if not api_key:
-            key_file = data_dir / "api_key"
-            if key_file.exists():
-                api_key = key_file.read_text(encoding="utf-8").strip()
-            if not api_key:
-                api_key = "m2a_" + secrets.token_urlsafe(32)
-                key_file.write_text(api_key, encoding="utf-8")
+def _cookies_from_file(path: str) -> list[AccountConfig]:
+    """Accept several shapes:
+      - {"accounts": [{"name": .., "cookies": ".."}]}
+      - {"cookies": {"a": "b", ..}}            (single account, JSON cookies)
+      - {"a": "b", ..}                          (single account, JSON cookies)
+      - raw "a=b; c=d" text                     (single account)
+    """
+    raw = open(path, encoding="utf-8").read().strip()
+    if raw.startswith("{"):
+        d = json.loads(raw)
+        if isinstance(d.get("accounts"), list):
+            out = []
+            for i, a in enumerate(d["accounts"]):
+                c = a.get("cookies", "")
+                if isinstance(c, dict):
+                    c = "; ".join(f"{k}={v}" for k, v in c.items())
+                if c:
+                    out.append(AccountConfig(name=a.get("name", f"acc{i+1}"),
+                                             cookies=str(c)))
+            return out
+        c = d.get("cookies", d) if isinstance(d, dict) else {}
+        if isinstance(c, dict):
+            c = "; ".join(f"{k}={v}" for k, v in c.items())
+        if c:
+            return [AccountConfig(name="default", cookies=str(c))]
+        return []
+    # raw cookie header text (possibly multi-line Netscape jar — take last resort)
+    lines = [ln.strip() for ln in raw.splitlines()
+             if ln.strip() and not ln.strip().startswith("#")]
+    if any(";" in ln and "=" in ln for ln in lines):
+        header = next(ln for ln in lines if ";" in ln and "=" in ln)
+        return [AccountConfig(name="default", cookies=header)]
+    if raw:
+        return [AccountConfig(name="default", cookies=" ".join(raw.split()))]
+    return []
 
-        meta_key = _env("META_API_KEY", "") or _env("MODEL_API_KEY", "")
 
-        return cls(
-            host=_env("MUSE2API_HOST", "127.0.0.1"),
-            port=_env_int("MUSE2API_PORT", 18610),
-            driver=_env("MUSE2API_DRIVER", "mock").lower(),
-            api_key=api_key,
-            data_dir=data_dir,
-            meta_api_key=meta_key,
-            upstream_timeout=_env_float("MUSE2API_TIMEOUT", 60.0),
-            chat_timeout=_env_float("MUSE2API_CHAT_TIMEOUT", 300.0),
-            image_timeout=_env_float("MUSE2API_IMAGE_TIMEOUT", 240.0),
-            log_level=_env("MUSE2API_LOG_LEVEL", "INFO").upper(),
-        )
+def load_settings() -> Settings:
+    s = Settings()
+    s.api_key = os.environ.get("MUSE2API_KEY", "").strip()
+    s.host = os.environ.get("MUSE2API_HOST", s.host)
+    s.port = int(os.environ.get("MUSE2API_PORT", s.port))
+    s.poll_interval = float(os.environ.get("MUSE2API_POLL_INTERVAL", s.poll_interval))
+    s.wait_s = float(os.environ.get("MUSE2API_WAIT_S", s.wait_s))
+    s.quiet_s = float(os.environ.get("MUSE2API_QUIET_S", s.quiet_s))
+    s.model_name = os.environ.get("MUSE2API_MODEL", s.model_name)
+
+    accounts: list[AccountConfig] = []
+    cookie_file = os.environ.get("MUSE_COOKIES_FILE", "").strip()
+    if cookie_file:
+        accounts.extend(_cookies_from_file(cookie_file))
+    single = os.environ.get("MUSE_COOKIES", "").strip()
+    if single:
+        accounts.append(AccountConfig(name="default", cookies=single))
+    # MUSE_COOKIES_1, MUSE_COOKIES_2, ... for extra accounts
+    i = 1
+    while True:
+        v = os.environ.get(f"MUSE_COOKIES_{i}", "").strip()
+        if not v:
+            break
+        accounts.append(AccountConfig(name=f"acc{i}", cookies=v))
+        i += 1
+    s.accounts = accounts
+    return s

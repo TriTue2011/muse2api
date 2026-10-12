@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "muse2api"
+version = "0.1.0"
+description = "OpenAI-compatible API gateway for muse.ai via the direct (cookie-only, no-browser) protocol"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "anyio>=4.0",
+    # Direct-protocol transport (same stack as nikships/muse-cli, MIT):
+    "curl_cffi>=0.11",     # Chrome TLS fingerprint for HTTPS bootstrap + WebSocket
+    "noiseprotocol>=0.3",  # Noise_XX_25519_AESGCM_SHA256 handshake
+    "protobuf>=5.0",       # envelope framing
+]
+
+[project.scripts]
+muse2api = "muse2api.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["muse2api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

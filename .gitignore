@@ -1,7 +1,10 @@
-.venv/
 __pycache__/
 *.pyc
-.pytest_cache/
-data/
+*.egg-info/
+dist/
+build/
+.venv/
+cookies*.json
+cookies*.txt
 .env
-*.log
+data/
